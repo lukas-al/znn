@@ -17,50 +17,50 @@ pub const ActivationFn = enum {
     }
 };
 
-/// Enum containing different layer types - only for curiosity purposes :)
-pub const OptimizationType = enum {
-    Legacy,    // Original implementation with multiple allocations
-    Optimized, // Single allocation with 2D view
-    Simd,      // Vector-based implementation
-};
-
-/// Layer struct
-pub const LegacyLayer = struct {
-    weights: [][]f32,
-    biases: []f32,
+/// Layer struct using vectors
+pub const Layer = struct {
+    weights: [][]@Vector(usize, f32), // each weights[i] contains vector of weights connecting to all downstream nodes
+    biases: []@Vector(usize, f32), // dimension of biases is same as num of neurons in layer
     activation: ActivationFn,
 };
-
-/// Allocation-optimised layer struct
-pub const OptimisedLayer = struct {
-    @compileError("Layer type not implemented")
-}
-
-/// Layer struct using Zig vector data structures
-pub const VecLayer = struct {
-    @compileError("Layer type not implemented")
-}
 
 /// Network Struct
 pub const Network = struct {
     layers: []Layer,
     arena: std.heap.ArenaAllocator,
-    optimization_type: OptimizationType,
 
     /// Initialise the network
     /// Caller owns the defered memory - take care with pointers :)
     pub fn init(backing_allocator: std.mem.Allocator, layer_sizes: []const usize) !Network {
-        // Create an arena and deinit if there's an error in this function to prevent leaks
-        var arena = std.heap.ArenaAllocator.init(backing_allocator);
+        var arena = std.heap.ArenaAllocator.init(backing_allocator); // Create an arena and deinit if there's an error in this function to prevent leaks
         errdefer arena.deinit();
+        const mem_alloc = arena.allocator; // Create the allocator explicitly as a constant
 
-        // Create the allocator explicitly as a constant
-        const allocator = arena.allocator;
+        var layers = try mem_alloc.alloc(Layer, layer_sizes.len - 1); // Allocate the empty memory for the layers struct
 
-        // Allocate the empty memory for the layers struct
-        var layers = try allocator.alloc(Layer, layer_sizes.len - 1);
-        
+        for (layers, 0..) |*layer, i| {
+            const weights = try mem_alloc.alloc(@Vector(layer_sizes[i], f32)); // For each layer - initialise the memory of a weight vector
 
-        @compileError("Network not implemented");
+            for (weights) |*row| {
+                row.* = try mem_alloc.alloc(@Vector(layer_sizes[i + 1], f32)); // For each row , create another vector connecting it to the next layer
+
+                for (row.*) |*weight| {
+                    weight.* = std.Random.floatNorm(); // For each individual weight in the row, initialise it randomly
+                }
+            }
+
+            var biases = try mem_alloc.alloc(f32, layer_sizes[i + 1]); // Allocate and initialises biases for the layer
+            for (biases) |*bias| {
+                bias.* = std.Random.floatNorm();
+            }
+
+            layer.* = Layer{ .weights = weights, .biases = biases, .activation = ActivationFn.ReLu }; // Create the layer struct
+        }
+
+        // Create the network struct
+        return Network{
+            .layers = layers,
+            .arena = arena,
+        };
     }
 };
