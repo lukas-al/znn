@@ -36,6 +36,12 @@ pub const Network = struct {
         errdefer arena.deinit();
         const mem_alloc = arena.allocator; // Create the allocator explicitly as a constant
 
+        // Create our random number generator
+        var seed: u64 = undefined;
+        try std.crypto.random.bytes(std.mem.asBytes(&seed));
+        var prng = std.rand.DefaultPrng.init(seed);
+        const rand = prng.random();
+
         var layers = try mem_alloc.alloc(Layer, layer_sizes.len - 1); // Allocate the empty memory for the layers struct
 
         for (layers, 0..) |*layer, i| {
@@ -45,13 +51,13 @@ pub const Network = struct {
                 row.* = try mem_alloc.alloc(@Vector(layer_sizes[i + 1], f32)); // For each row , create another vector connecting it to the next layer
 
                 for (row.*) |*weight| {
-                    weight.* = std.Random.floatNorm(); // For each individual weight in the row, initialise it randomly
+                    weight.* = rand.floatNorm(f32); // For each individual weight in the row, initialise it randomly
                 }
             }
 
             var biases = try mem_alloc.alloc(f32, layer_sizes[i + 1]); // Allocate and initialises biases for the layer
             for (biases) |*bias| {
-                bias.* = std.Random.floatNorm();
+                bias.* = rand.floatNorm(f32);
             }
 
             layer.* = Layer{ .weights = weights, .biases = biases, .activation = ActivationFn.ReLu }; // Create the layer struct
@@ -63,4 +69,54 @@ pub const Network = struct {
             .arena = arena,
         };
     }
+
+    /// Deinitialise the network
+    pub fn deinit(self: *Network) void {
+        self.arena.deinit();
+    }
 };
+
+test "Network constructor" {
+    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const layer_sizes = [_]usize{ 3, 4, 2 };
+    const network = try Network.init(arena.allocator(), layer_sizes);
+    defer network.deinit();
+
+    // Check first layer dimensions
+    try std.testing.expectEqual(network.layers[0].weights.len, 4);
+    try std.testing.expectEqual(network.layers[0].weights[0].len, 3);
+    try std.testing.expectEqual(network.layers[0].biases.len, 4);
+
+    // Check output layer dimensions
+    try std.testing.expectEqual(network.layers[1].weights.len, 2);
+    try std.testing.expectEqual(network.layers[1].weights[0].len, 4);
+    try std.testing.expectEqual(network.layers[1].biases.len, 2);
+}
+
+test "Network constructor - deep network" {
+    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const layer_sizes = [_]usize{ 2, 4, 4, 3, 1 };
+    const network = try Network.init(arena.allocator(), layer_sizes);
+    defer network.deinit();
+
+    try std.testing.expectEqual(4, network.layers.len);
+    try std.testing.expectEqual(ActivationFn.ReLu, network.layers[0].activation);
+}
+
+test "Network constructor - minimal network" {
+    const arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const layer_sizes = [_]usize{ 1, 1 };
+    const network = try Network.init(arena.allocator(), layer_sizes);
+    defer network.deinit();
+
+    try std.testing.expectEqual(1, network.layers.len);
+    try std.testing.expectEqual(network.layers[0].weights.len, 1);
+    try std.testing.expectEqual(network.layers[0].weights[0].len, 1);
+    try std.testing.expectEqual(network.layers[0].biases.len, 1);
+}
