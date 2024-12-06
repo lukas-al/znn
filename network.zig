@@ -1,5 +1,6 @@
 //! This module contains the structures for networks and layers
 const std = @import("std");
+// const stdout = std.io.getStdOut().writer();
 
 /// Enum containing activation function types
 pub const ActivationFn = enum {
@@ -30,7 +31,7 @@ pub const Network = struct {
     arena: std.heap.ArenaAllocator,
 
     /// Initialise the network
-    /// Caller owns the defered memory - take care with pointers :)
+    /// Caller owns the memory?
     pub fn init(backing_allocator: std.mem.Allocator, layer_sizes: []const usize) !Network {
         var arena = std.heap.ArenaAllocator.init(backing_allocator); // Create an arena and deinit if there's an error in this function to prevent leaks
         errdefer arena.deinit();
@@ -45,13 +46,13 @@ pub const Network = struct {
         const layers = try mem_alloc.alloc(Layer, layer_sizes.len - 1); // Allocate the empty memory for the layers struct
 
         for (layers, 0..) |*layer, i| {
-            const weights = try mem_alloc.alloc([]f32, layer_sizes[i]); // For each layer - initialise the memory of a weight vector
+            const weights = try mem_alloc.alloc([]f32, layer_sizes[i]); // For each layer - initialise the memory of a weight array
 
             for (weights) |*row| {
-                row.* = try mem_alloc.alloc(f32, layer_sizes[i + 1]); // For each row , create another vector connecting it to the next layer
+                row.* = try mem_alloc.alloc(f32, layer_sizes[i + 1]); // For each row , create another pointer array connecting it to each neuron in the next layer
 
                 for (row.*) |*weight| {
-                    weight.* = rand.floatNorm(f32); // For each individual weight in the row, initialise it randomly
+                    weight.* = rand.floatNorm(f32); // For each individual weight in the row, initialise it randomly and resolve the pointer
                 }
             }
 
@@ -81,14 +82,17 @@ test "Network constructor - first" {
     var network = try Network.init(std.testing.allocator, &layer_sizes);
     defer network.deinit();
 
+    // Check the number of layers
+    try std.testing.expectEqual(network.layers.len, layer_sizes.len - 1);
+
     // Check first layer dimensions
-    try std.testing.expectEqual(network.layers[0].weights.len, 4);
-    try std.testing.expectEqual(network.layers[0].weights[0].len, 3);
+    try std.testing.expectEqual(network.layers[0].weights.len, 3);
+    try std.testing.expectEqual(network.layers[0].weights[0].len, 4);
     try std.testing.expectEqual(network.layers[0].biases.len, 4);
 
     // Check output layer dimensions
-    try std.testing.expectEqual(network.layers[1].weights.len, 2);
-    try std.testing.expectEqual(network.layers[1].weights[0].len, 4);
+    try std.testing.expectEqual(network.layers[1].weights.len, 4);
+    try std.testing.expectEqual(network.layers[1].weights[0].len, 2);
     try std.testing.expectEqual(network.layers[1].biases.len, 2);
 }
 
