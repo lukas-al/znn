@@ -6,7 +6,9 @@ Zig Neural Network. Rolling my own implementation of a neural network in Zig. Go
 ## Structure:
 - main.zig: Entry point of the program.
 - network.zig: Contains the neural network struct and functions.
-- inference.zig: Contains the inference functions, context, and memory handlers.
+- inference.zig: Contains the forward pass inference functions
+- training.zig: Contains training functions incl. backpropagation to update the model based on inputs
+- serialize.zig: Used to persist the model following training and read it for use.
 
 ### Network:
 - ActivationFn enum: Contains the activation functions.
@@ -15,4 +17,4 @@ Zig Neural Network. Rolling my own implementation of a neural network in Zig. Go
 - Network struct: Contains the layers and the forward function.
 
 ### Inference:
-- 
+- Contains structures to allow us 
