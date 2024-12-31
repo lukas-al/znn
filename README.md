@@ -17,4 +17,11 @@ Zig Neural Network. Rolling my own implementation of a neural network in Zig. Go
 - Network struct: Contains the layers and the forward function.
 
 ### Inference:
-- Contains structures to allow us 
+- Contains inference context, lightweight to use for predictions (only forward pass)
+
+### Training:
+- Contains training context, used to update the model with backpropagation
+
+
+### Serialize:
+- Contains JSON logic, to persist the model as required.
