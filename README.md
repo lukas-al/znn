@@ -11,8 +11,9 @@ Zig Neural Network. Rolling my own implementation of a neural network in Zig. Go
 - serialize.zig: Used to persist the model following training and read it for use.
 
 ### Network:
+- Contains network structure
 - ActivationFn enum: Contains the activation functions.
-    - Sigmoid, ReLU, TanH, Softmax
+    - Sigmoid, ReLu, TanH, Softmax
 - Layer struct: Structure containing the W&B & activation function.
 - Network struct: Contains the layers and the forward function.
 
@@ -21,7 +22,6 @@ Zig Neural Network. Rolling my own implementation of a neural network in Zig. Go
 
 ### Training:
 - Contains training context, used to update the model with backpropagation
-
 
 ### Serialize:
 - Contains JSON logic, to persist the model as required.

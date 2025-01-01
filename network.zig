@@ -94,6 +94,10 @@ test "Network constructor - first" {
     try std.testing.expectEqual(network.layers[1].weights.len, 4);
     try std.testing.expectEqual(network.layers[1].weights[0].len, 2);
     try std.testing.expectEqual(network.layers[1].biases.len, 2);
+
+    // Print some layer weights & biases
+    // std.debug.print("Layer 0 Node 0 Weight 0: {d} \n", .{network.layers[0].weights[0][0]});
+    // std.debug.print("Layer 1 Node 1 Weight 1: {d} \n", .{network.layers[1].weights[1][1]});
 }
 
 test "Network constructor - deep network" {
