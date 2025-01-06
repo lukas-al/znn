@@ -26,6 +26,18 @@ pub const InferenceContext = struct {
         _ = self.arena.reset(.free_all);
     }
 
+    /// Compute maximum layer size for allocation to a temporary buffer.
+    fn maxLayerSize(network: *Network) usize {
+        var max_size: usize = 0;
+        for (network.layers) |layer| {
+            if (layer.biases.len > max_size) {
+                max_size = layer.biases.len;
+            }
+        }
+
+        return max_size;
+    }
+
     /// Simple forward pass implementation for the network. Returns an f32 array of the same dim as the network final layer.
     pub fn forward(
         self: *InferenceContext,
@@ -40,24 +52,26 @@ pub const InferenceContext = struct {
 
         defer self.reset();
         const allocator = self.arena.allocator();
-        var current = try allocator.dupe(f32, input);
+        var current = try allocator.dupe(f32, input); // Copy the inputs
+
+        var temp_buffer = try allocator.alloc(f32, maxLayerSize(network));
+        _ = &temp_buffer; // Acknowledge potential mutation through pointers
 
         for (network.layers) |layer| {
             // Allocate temp memory of the right size for our next layer
-            var next = try allocator.alloc(f32, layer.biases.len);
-            // @constCast(&next); // Acknowledge potential mutation through pointers
-            _ = &next;
+            // var next = try allocator.alloc(f32, layer.biases.len);
+            // _ = &next; // Acknowledge potential mutation through pointers
 
             // Transform the next layer in place
-            VecOps.linearForward(next, layer.weights, current, layer.biases);
+            VecOps.linearForward(temp_buffer, layer.weights, current, layer.biases);
 
             // Calculate the activation func for each value before we copy to the next layer
-            for (next) |*val| {
+            for (temp_buffer) |*val| {
                 val.* = layer.activation.apply(val.*);
             }
 
             // Replace our current with our next
-            current = next;
+            current = temp_buffer;
         }
 
         // Return our output to the peristent output allocator
