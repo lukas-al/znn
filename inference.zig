@@ -54,6 +54,7 @@ pub const InferenceContext = struct {
         const allocator = self.arena.allocator();
         var current = try allocator.dupe(f32, input); // Copy the inputs
 
+        // Create a single temp buffer for intermediate temp layers used during calculation.
         var temp_buffer = try allocator.alloc(f32, maxLayerSize(network));
         _ = &temp_buffer; // Acknowledge potential mutation through pointers
 

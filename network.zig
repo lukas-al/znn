@@ -1,6 +1,6 @@
 //! This module contains the structures for networks and layers
 const std = @import("std");
-// const stdout = std.io.getStdOut().writer();
+const VecOps = @import("vectors.zig").VecOps;
 
 /// Enum containing activation function types
 pub const ActivationFn = enum {
@@ -14,6 +14,17 @@ pub const ActivationFn = enum {
             .ReLu => if (x > 0) x else 0,
             .Sigmoid => 1.0 / (1.0 + std.math.exp(-x)),
             .Tanh => std.math.tanh(x),
+        };
+    }
+
+    /// Derivative of activation function w.r.t its output value
+    /// (i.e. derivative(activation(x)) w.r.t. "activation(x)", not w.r.t. x)
+    /// Used for backpropagation
+    pub fn derivative(self: ActivationFn, x: f32) f32 {
+        return switch (self) {
+            .ReLu => if (x > 0) 1.0 else 0.0,
+            .Sigmoid => x * (1.0 - x),
+            .Tanh => 1.0 - (x * x),
         };
     }
 };
@@ -32,7 +43,9 @@ pub const Network = struct {
 
     /// Initialise the network
     /// Caller owns the memory?
-    pub fn init(backing_allocator: std.mem.Allocator, layer_sizes: []const usize) !Network {
+    pub fn init(backing_allocator: std.mem.Allocator, layer_sizes: []const usize, activation_fn: ActivationFn) !Network {
+        if (layer_sizes.len < 2) return error.InvalidArgument;
+
         var arena = std.heap.ArenaAllocator.init(backing_allocator); // Create an arena and deinit if there's an error in this function to prevent leaks
         errdefer arena.deinit();
         const mem_alloc = arena.allocator(); // Create the allocator explicitly as a constant
@@ -61,7 +74,7 @@ pub const Network = struct {
                 bias.* = rand.floatNorm(f32);
             }
 
-            layer.* = Layer{ .weights = weights, .biases = biases, .activation = ActivationFn.ReLu }; // Create the layer struct
+            layer.* = Layer{ .weights = weights, .biases = biases, .activation = activation_fn }; // Create the layer struct
         }
 
         // Create the network struct
@@ -75,11 +88,160 @@ pub const Network = struct {
     pub fn deinit(self: *Network) void {
         self.arena.deinit();
     }
+
+    /// Compute maximum layer size for allocation to a temporary buffer.
+    fn maxLayerSize(self: *Network) usize {
+        var max_size: usize = 0;
+        for (self.layers) |layer| {
+            if (layer.biases.len > max_size) {
+                max_size = layer.biases.len;
+            }
+        }
+
+        return max_size;
+    }
+
+    /// Perform a forward pass using the network. Caller owns memory for output.
+    pub fn forward(
+        self: *Network,
+        input: []const f32,
+        output_allocator: std.mem.Allocator,
+    ) ![]f32 {
+        // Verify input size matches first layer
+        if (self.layers.len == 0 or input.len != self.layers[0].weights.len) {
+            return error.InvalidInput;
+        }
+
+        // TODO: Use a temporary buffer stored in the network, sized appropriately
+        var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer temp_arena.deinit();
+        const temp_allocator = temp_arena.allocator();
+
+        var temp_buffer = try temp_allocator.alloc(f32, self.maxLayerSize());
+        _ = &temp_buffer; // Acknowledge potential mutation through pointers
+        var current = try temp_allocator.dupe(f32, input);
+
+        for (self.layers) |layer| {
+            // Transform the next layer in place
+            VecOps.linearForward(temp_buffer, layer.weights, current, layer.biases);
+
+            // Calculate the activation func for each value before we copy to the next layer
+            for (temp_buffer) |*val| {
+                val.* = layer.activation.apply(val.*);
+            }
+
+            // Replace our current with our next
+            current = temp_buffer;
+        }
+
+        // Once we reach the final layer, return the output
+        const output = try output_allocator.dupe(f32, current);
+        return output;
+    }
+
+    /// Mutate the network in-place following a backward pass.
+    pub fn backward(
+        self: *Network,
+        input: []const f32,
+        target: []const f32,
+        learning_rate: f32,
+    ) !void {
+        // Validate input
+        if (self.layers.len == 0 or input.len != self.layers[0].weights.len) return error.InvalidInput;
+        if (target.len != self.layers[self.layers.len - 1].weights.len) return error.InvalidInput;
+
+        var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer temp_arena.deinit();
+        const temp_allocator = temp_arena.allocator();
+
+        // Create an array list for our forward passes
+        var activations = std.ArrayList([]f32).init(temp_allocator);
+        defer activations.deinit();
+
+        // Create a buffer for forward pass
+        var buffer = try temp_allocator.alloc(f32, self.maxLayerSize());
+        _ = &buffer; // Acknowledge potential mutation through pointers
+        var current = try temp_allocator.dupe(f32, input);
+
+        // Perform a forward pass, storing our activations this time.
+        try activations.append(current); // Start with the input as the first activation (for our first layer)
+        for (self.layers) |layer| {
+            // Forward pass for each layer from scratch to store intermediate state
+            VecOps.linearForward(buffer, layer.weights, current, layer.biases);
+
+            // Calculate the activation func for each value before we copy to the next layer
+            for (buffer) |*val| {
+                val.* = layer.activation.apply(val.*);
+            }
+
+            // Store our activation for the rest of the backward pass
+            try activations.append(buffer);
+            current = buffer; // Replace current with next and move to the next layer
+        }
+
+        // ================= Do backward pass
+        // (1) Compute error using Mean Squared Error (derives to predictions[i] - target[i])
+        const predicted = activations.items[self.layers.len]; // Get the predictions from the final layer
+        var current_delta = try temp_allocator.alloc(f32, predicted.len); // Current for each output neuron
+
+        // For each output neuron
+        for (predicted, 0..) |pred, i| {
+            // Component 1: partial derivative of error wrt output. Calculate dError_total / dOutput_i
+            const err = pred - target[i]; // This is the same for output and hidden neurons
+            // Component 2: partial derivative of output wrt sum. Calculate dOutput_i / dSum_i
+            current_delta[i] = err * self.layers[self.layers.len - 1].activation.derivative(pred); // This is the same for output and hidden neurons
+        }
+
+        // (2) Propagate backwards
+        // Idiomatic reverse indexing through array is odd in zig.
+        var layer_idx: usize = self.layers.len - 1;
+        while (true) : (layer_idx -= 1) {
+            const layer = self.layers[layer_idx];
+            const activation_in = activations.items[layer_idx]; // Input to this layer
+
+            // Component 3: Partial derivative of sum wrt weight. Calculate dSum_i / dWeight_i
+            // Allocate next delta - the gradient wrt the *previous* layer's output.
+            var next_delta = try temp_allocator.alloc(f32, activation_in.len);
+            // Initialise to 0
+            for (next_delta) |*nd| {
+                nd.* = 0;
+            }
+
+            // Update each weight and bias, accumulating the delta to calculate the next layer
+            for (0..layer.biases.len) |n| {
+                // 1. Update bias: dBias = current_delta[n]
+                layer.biases[n] -= learning_rate * current_delta[n];
+
+                // 2. Update each weight & accumulate gradient
+                for (0..activation_in.len) |m| {
+                    const input_val = activation_in[m];
+                    const grad_w = input_val * current_delta[n];
+
+                    layer.weights[m][n] -= learning_rate * grad_w;
+                    // Accumulate delta for previous layer. Calculate next_delta[m] += (delta for this neuron) * (current weight)
+                    next_delta[m] += current_delta[n] * layer.weights[m][n];
+                }
+            }
+
+            // If we're not at the first layer - need the previous layers' contributions. Since we're working backwards...
+            if (layer_idx > 0) {
+                for (0..activation_in.len) |m| {
+                    next_delta[m] = next_delta[m] * self.layers[layer_idx - 1].activation.derivative(activation_in[m]);
+                }
+            }
+
+            // Prep for next iteration
+            current_delta = next_delta;
+
+            // Stop if we just updated the first layer
+            if (layer_idx == 0) break;
+        }
+    }
 };
 
 test "Network constructor - first" {
     const layer_sizes = [_]usize{ 3, 4, 2 };
-    var network = try Network.init(std.testing.allocator, &layer_sizes);
+    var network = try Network.init(std.testing.allocator, &layer_sizes, ActivationFn.ReLu);
     defer network.deinit();
 
     // Check the number of layers
@@ -102,7 +264,7 @@ test "Network constructor - first" {
 
 test "Network constructor - deep network" {
     const layer_sizes = [_]usize{ 2, 4, 4, 3, 1 };
-    var network = try Network.init(std.testing.allocator, &layer_sizes);
+    var network = try Network.init(std.testing.allocator, &layer_sizes, ActivationFn.ReLu);
     defer network.deinit();
 
     try std.testing.expectEqual(4, network.layers.len);
@@ -111,11 +273,91 @@ test "Network constructor - deep network" {
 
 test "Network constructor - minimal network" {
     const layer_sizes = [_]usize{ 1, 1 };
-    var network = try Network.init(std.testing.allocator, &layer_sizes);
+    var network = try Network.init(std.testing.allocator, &layer_sizes, ActivationFn.ReLu);
     defer network.deinit();
 
     try std.testing.expectEqual(1, network.layers.len);
     try std.testing.expectEqual(network.layers[0].weights.len, 1);
     try std.testing.expectEqual(network.layers[0].weights[0].len, 1);
     try std.testing.expectEqual(network.layers[0].biases.len, 1);
+}
+
+test "Network - single layer forward pass" {
+    // Create a simple 2->1 network
+    var network = try Network.init(std.testing.allocator, &[_]usize{ 2, 1 }, ActivationFn.ReLu);
+    defer network.deinit();
+
+    // Configure the weights and biases for a simple sum operation
+    network.layers[0].weights[0][0] = 1.0;
+    network.layers[0].weights[1][0] = 1.0;
+    network.layers[0].biases[0] = 0.0;
+    network.layers[0].activation = .ReLu;
+
+    // Input: [1.0, 2.0] should give us 3.0 (1.0 + 2.0 + 0.0 bias)
+    const input = [_]f32{ 1.0, 2.0 };
+    const output = try network.forward(&input, std.testing.allocator);
+    defer std.testing.allocator.free(output);
+
+    try std.testing.expectEqual(@as(usize, 1), output.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), output[0], 0.0001);
+}
+
+test "Network - simple backprop on a [2,2,2] network" {
+
+    // 1) Construct a small [2, 2, 2] network
+    const layer_sizes = [_]usize{ 2, 2, 2 };
+    var network = try Network.init(std.testing.allocator, &layer_sizes, ActivationFn.ReLu);
+    defer network.deinit();
+
+    // For reproducibility, override the randomly initialized weights/biases with known constants:
+    // -- First layer (index 0)
+    network.layers[0].weights[0][0] = 0.15;
+    network.layers[0].weights[0][1] = 0.20;
+    network.layers[0].weights[1][0] = 0.25;
+    network.layers[0].weights[1][1] = 0.30;
+
+    network.layers[0].biases[0] = 0.35;
+    network.layers[0].biases[1] = 0.35;
+
+    // -- Second layer (index 1)
+    network.layers[1].weights[0][0] = 0.40;
+    network.layers[1].weights[0][1] = 0.45;
+    network.layers[1].weights[1][0] = 0.50;
+    network.layers[1].weights[1][1] = 0.55;
+
+    network.layers[1].biases[0] = 0.60;
+    network.layers[1].biases[1] = 0.60;
+
+    // 2) Do a forward pass with a known input
+    const input_data = [_]f32{ 0.05, 0.10 };
+    const output_before = try network.forward(&input_data, std.testing.allocator);
+    defer std.testing.allocator.free(output_before);
+
+    // 2a) Test that the output is correct
+    try std.testing.expectApproxEqAbs(0.75136507, output_before[0], 1e-5);
+    try std.testing.expectApproxEqAbs(0.772928465, output_before[0], 1e-5);
+
+    // 3) Run a backward pass with a known target
+    // Let's say we want the network to produce [0.0, 1.0] instead.
+    const target_data = [_]f32{ 0.01, 0.99 };
+    try network.backward(&input_data, &target_data, 0.5);
+
+    // 4) Check that the weights and biases have changed as expected
+    const expected_w1 = 0.149780716;
+    const expected_w2 = 0.19956143;
+    const expected_w3 = 0.24975114;
+    const expected_w4 = 0.29950299;
+    const expected_w5 = 0.35891648;
+    const expected_w6 = 0.408666186;
+    const expected_w7 = 0.51130270;
+    const expected_w8 = 0.561370121;
+
+    try std.testing.expectApproxEqAbs(expected_w1, network.layers[0].weights[0][0], 1e-5);
+    try std.testing.expectApproxEqAbs(expected_w2, network.layers[0].weights[0][1], 1e-5);
+    try std.testing.expectApproxEqAbs(expected_w3, network.layers[0].weights[1][0], 1e-5);
+    try std.testing.expectApproxEqAbs(expected_w4, network.layers[0].weights[1][1], 1e-5);
+    try std.testing.expectApproxEqAbs(expected_w5, network.layers[1].weights[0][0], 1e-5);
+    try std.testing.expectApproxEqAbs(expected_w6, network.layers[1].weights[0][1], 1e-5);
+    try std.testing.expectApproxEqAbs(expected_w7, network.layers[1].weights[1][0], 1e-5);
+    try std.testing.expectApproxEqAbs(expected_w8, network.layers[1].weights[1][1], 1e-5);
 }
