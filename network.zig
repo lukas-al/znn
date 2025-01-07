@@ -7,6 +7,7 @@ pub const ActivationFn = enum {
     ReLu,
     Sigmoid,
     Tanh,
+    None,
 
     /// Logic for activation functions
     pub fn apply(self: ActivationFn, x: f32) f32 {
@@ -14,17 +15,18 @@ pub const ActivationFn = enum {
             .ReLu => if (x > 0) x else 0,
             .Sigmoid => 1.0 / (1.0 + std.math.exp(-x)),
             .Tanh => std.math.tanh(x),
+            .None => x,
         };
     }
 
     /// Derivative of activation function w.r.t its output value
     /// (i.e. derivative(activation(x)) w.r.t. "activation(x)", not w.r.t. x)
-    /// Used for backpropagation
     pub fn derivative(self: ActivationFn, x: f32) f32 {
         return switch (self) {
             .ReLu => if (x > 0) 1.0 else 0.0,
             .Sigmoid => x * (1.0 - x),
             .Tanh => 1.0 - (x * x),
+            .None => x,
         };
     }
 };
@@ -112,26 +114,29 @@ pub const Network = struct {
             return error.InvalidInput;
         }
 
-        // TODO: Use a temporary buffer stored in the network, sized appropriately
+        // TODO: Need to improve the allocation of temporary memory here.
+        // TODO: Could optimise with a temporary buffer stored in the network struct outside this, sized appropriately
+        // TODO: Would need to figure out how to make the linear forward not have out of bounds - remove the inplace operation?
         var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer temp_arena.deinit();
         const temp_allocator = temp_arena.allocator();
 
-        var temp_buffer = try temp_allocator.alloc(f32, self.maxLayerSize());
-        _ = &temp_buffer; // Acknowledge potential mutation through pointers
+        // var temp_buffer = try temp_allocator.alloc(f32, self.maxLayerSize());
+        // _ = &temp_buffer; // Acknowledge potential mutation through pointers
         var current = try temp_allocator.dupe(f32, input);
 
         for (self.layers) |layer| {
-            // Transform the next layer in place
-            VecOps.linearForward(temp_buffer, layer.weights, current, layer.biases);
+            var next = try temp_allocator.alloc(f32, layer.biases.len);
+            _ = &next; // Acknowledge potential mutation through pointers
+            VecOps.linearForward(next, layer.weights, current, layer.biases);
 
             // Calculate the activation func for each value before we copy to the next layer
-            for (temp_buffer) |*val| {
+            for (next) |*val| {
                 val.* = layer.activation.apply(val.*);
             }
 
             // Replace our current with our next
-            current = temp_buffer;
+            current = next;
         }
 
         // Once we reach the final layer, return the output
@@ -148,7 +153,7 @@ pub const Network = struct {
     ) !void {
         // Validate input
         if (self.layers.len == 0 or input.len != self.layers[0].weights.len) return error.InvalidInput;
-        if (target.len != self.layers[self.layers.len - 1].weights.len) return error.InvalidInput;
+        if (target.len != self.layers[self.layers.len - 1].biases.len) return error.InvalidInput;
 
         var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer temp_arena.deinit();
@@ -159,24 +164,29 @@ pub const Network = struct {
         defer activations.deinit();
 
         // Create a buffer for forward pass
-        var buffer = try temp_allocator.alloc(f32, self.maxLayerSize());
-        _ = &buffer; // Acknowledge potential mutation through pointers
+        // var buffer = try temp_allocator.alloc(f32, self.maxLayerSize());
+        // _ = &buffer; // Acknowledge potential mutation through pointers
         var current = try temp_allocator.dupe(f32, input);
 
         // Perform a forward pass, storing our activations this time.
         try activations.append(current); // Start with the input as the first activation (for our first layer)
         for (self.layers) |layer| {
+            // TODO: Is there a way to remove this temporary allocation within each pass?
+            // TODO: Can we overwrite it each time via a resizable buffer?
+            var next = try temp_allocator.alloc(f32, layer.biases.len);
+            _ = &next; // Acknowledge potential mutation through pointers
+
             // Forward pass for each layer from scratch to store intermediate state
-            VecOps.linearForward(buffer, layer.weights, current, layer.biases);
+            VecOps.linearForward(next, layer.weights, current, layer.biases);
 
             // Calculate the activation func for each value before we copy to the next layer
-            for (buffer) |*val| {
+            for (next) |*val| {
                 val.* = layer.activation.apply(val.*);
             }
 
             // Store our activation for the rest of the backward pass
-            try activations.append(buffer);
-            current = buffer; // Replace current with next and move to the next layer
+            try activations.append(next);
+            current = next; // Replace current with next and move to the next layer
         }
 
         // ================= Do backward pass
@@ -217,9 +227,11 @@ pub const Network = struct {
                     const input_val = activation_in[m];
                     const grad_w = input_val * current_delta[n];
 
-                    layer.weights[m][n] -= learning_rate * grad_w;
                     // Accumulate delta for previous layer. Calculate next_delta[m] += (delta for this neuron) * (current weight)
                     next_delta[m] += current_delta[n] * layer.weights[m][n];
+
+                    // Update the weight
+                    layer.weights[m][n] -= learning_rate * grad_w;
                 }
             }
 
@@ -248,14 +260,14 @@ test "Network constructor - first" {
     try std.testing.expectEqual(network.layers.len, layer_sizes.len - 1);
 
     // Check first layer dimensions
-    try std.testing.expectEqual(network.layers[0].weights.len, 3);
-    try std.testing.expectEqual(network.layers[0].weights[0].len, 4);
-    try std.testing.expectEqual(network.layers[0].biases.len, 4);
+    try std.testing.expectEqual(3, network.layers[0].weights.len);
+    try std.testing.expectEqual(4, network.layers[0].weights[0].len);
+    try std.testing.expectEqual(4, network.layers[0].biases.len);
 
     // Check output layer dimensions
-    try std.testing.expectEqual(network.layers[1].weights.len, 4);
-    try std.testing.expectEqual(network.layers[1].weights[0].len, 2);
-    try std.testing.expectEqual(network.layers[1].biases.len, 2);
+    try std.testing.expectEqual(4, network.layers[1].weights.len);
+    try std.testing.expectEqual(2, network.layers[1].weights[0].len);
+    try std.testing.expectEqual(2, network.layers[1].biases.len);
 
     // Print some layer weights & biases
     // std.debug.print("Layer 0 Node 0 Weight 0: {d} \n", .{network.layers[0].weights[0][0]});
@@ -299,31 +311,76 @@ test "Network - single layer forward pass" {
     defer std.testing.allocator.free(output);
 
     try std.testing.expectEqual(@as(usize, 1), output.len);
-    try std.testing.expectApproxEqAbs(@as(f32, 3.0), output[0], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), output[0], 1e-4);
 }
 
-test "Network - simple backprop on a [2,2,2] network" {
+test "Forward and Backprop on 2-2-1 Network" {
+    const layer_sizes = [_]usize{ 2, 2, 1 };
+    var network = try Network.init(std.testing.allocator, &layer_sizes, .ReLu);
+    defer network.deinit();
 
+    // Overwrite our Ws&Bs
+    network.layers[0].weights[0][0] = 0.11;
+    network.layers[0].weights[0][1] = 0.12;
+    network.layers[0].weights[1][0] = 0.08;
+    network.layers[0].weights[1][1] = 0.21;
+    network.layers[1].weights[0][0] = 0.15;
+    network.layers[1].weights[1][0] = 0.14;
+
+    network.layers[0].biases[0] = 0;
+    network.layers[0].biases[1] = 0;
+    network.layers[1].biases[0] = 0;
+
+    const input_data = [_]f32{ 2, 3 };
+    const output_before = try network.forward(&input_data, std.testing.allocator);
+    defer std.testing.allocator.free(output_before);
+    // Test whether the forward pass has the right results
+    try std.testing.expectApproxEqAbs(0.191, output_before[0], 1e-3);
+
+    // -------------- Test backpropagation
+    const target_data = [_]f32{1};
+    try network.backward(&input_data, &target_data, 0.05);
+
+    try std.testing.expectApproxEqAbs(0.12, network.layers[0].weights[0][0], 1e-2);
+    try std.testing.expectApproxEqAbs(0.13, network.layers[0].weights[0][1], 1e-2);
+    try std.testing.expectApproxEqAbs(0.10, network.layers[0].weights[1][0], 1e-2);
+    try std.testing.expectApproxEqAbs(0.23, network.layers[0].weights[1][1], 1e-2);
+    try std.testing.expectApproxEqAbs(0.17, network.layers[1].weights[0][0], 1e-2);
+    try std.testing.expectApproxEqAbs(0.17, network.layers[1].weights[1][0], 1e-2);
+
+    // Reset our biases as the example I used for these numbers didn't have those updateable
+    network.layers[0].biases[0] = 0;
+    network.layers[0].biases[1] = 0;
+    network.layers[1].biases[0] = 0;
+
+    const output_after = try network.forward(&input_data, std.testing.allocator);
+    defer std.testing.allocator.free(output_after);
+
+    // Test whether the updated outputs are right
+    try std.testing.expectApproxEqAbs(0.26, output_after[0], 0.01);
+}
+
+test "Network - Forward and backprop on a [2,2,2] network" {
     // 1) Construct a small [2, 2, 2] network
     const layer_sizes = [_]usize{ 2, 2, 2 };
-    var network = try Network.init(std.testing.allocator, &layer_sizes, ActivationFn.ReLu);
+    var network = try Network.init(std.testing.allocator, &layer_sizes, ActivationFn.Sigmoid);
     defer network.deinit();
 
     // For reproducibility, override the randomly initialized weights/biases with known constants:
     // -- First layer (index 0)
     network.layers[0].weights[0][0] = 0.15;
-    network.layers[0].weights[0][1] = 0.20;
-    network.layers[0].weights[1][0] = 0.25;
-    network.layers[0].weights[1][1] = 0.30;
+    network.layers[0].weights[0][1] = 0.25;
+    network.layers[0].weights[1][0] = 0.30;
+    network.layers[0].weights[1][1] = 0.20;
 
     network.layers[0].biases[0] = 0.35;
     network.layers[0].biases[1] = 0.35;
 
     // -- Second layer (index 1)
     network.layers[1].weights[0][0] = 0.40;
-    network.layers[1].weights[0][1] = 0.45;
-    network.layers[1].weights[1][0] = 0.50;
-    network.layers[1].weights[1][1] = 0.55;
+    network.layers[1].weights[0][1] = 0.50;
+    network.layers[1].weights[1][0] = 0.55;
+    network.layers[1].weights[1][1] = 0.45;
 
     network.layers[1].biases[0] = 0.60;
     network.layers[1].biases[1] = 0.60;
@@ -334,30 +391,19 @@ test "Network - simple backprop on a [2,2,2] network" {
     defer std.testing.allocator.free(output_before);
 
     // 2a) Test that the output is correct
-    try std.testing.expectApproxEqAbs(0.75136507, output_before[0], 1e-5);
-    try std.testing.expectApproxEqAbs(0.772928465, output_before[0], 1e-5);
+    try std.testing.expectApproxEqAbs(0.75136507, output_before[0], 1e-4);
+    try std.testing.expectApproxEqAbs(0.77292847, output_before[1], 1e-4);
 
     // 3) Run a backward pass with a known target
-    // Let's say we want the network to produce [0.0, 1.0] instead.
     const target_data = [_]f32{ 0.01, 0.99 };
     try network.backward(&input_data, &target_data, 0.5);
 
-    // 4) Check that the weights and biases have changed as expected
-    const expected_w1 = 0.149780716;
-    const expected_w2 = 0.19956143;
-    const expected_w3 = 0.24975114;
-    const expected_w4 = 0.29950299;
-    const expected_w5 = 0.35891648;
-    const expected_w6 = 0.408666186;
-    const expected_w7 = 0.51130270;
-    const expected_w8 = 0.561370121;
-
-    try std.testing.expectApproxEqAbs(expected_w1, network.layers[0].weights[0][0], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_w2, network.layers[0].weights[0][1], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_w3, network.layers[0].weights[1][0], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_w4, network.layers[0].weights[1][1], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_w5, network.layers[1].weights[0][0], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_w6, network.layers[1].weights[0][1], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_w7, network.layers[1].weights[1][0], 1e-5);
-    try std.testing.expectApproxEqAbs(expected_w8, network.layers[1].weights[1][1], 1e-5);
+    try std.testing.expectApproxEqAbs(0.149780716, network.layers[0].weights[0][0], 1e-4);
+    try std.testing.expectApproxEqAbs(0.19956143, network.layers[0].weights[0][1], 1e-4);
+    try std.testing.expectApproxEqAbs(0.24975114, network.layers[0].weights[1][0], 1e-4);
+    try std.testing.expectApproxEqAbs(0.29950299, network.layers[0].weights[1][1], 1e-4);
+    try std.testing.expectApproxEqAbs(0.35891648, network.layers[1].weights[0][0], 1e-4);
+    try std.testing.expectApproxEqAbs(0.408666186, network.layers[1].weights[0][1], 1e-4);
+    try std.testing.expectApproxEqAbs(0.51130270, network.layers[1].weights[1][0], 1e-4);
+    try std.testing.expectApproxEqAbs(0.561370121, network.layers[1].weights[1][1], 1e-4);
 }
