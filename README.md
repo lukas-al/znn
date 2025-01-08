@@ -1,6 +1,8 @@
 # ZNN
 Zig Neural Network. Rolling my own implementation of a neural network in Zig. Goal is to solve MNIST or some similar problem efficiently with it. Shamelessely steals concepts from the [ZML](https://github.com/zml/zml) library.
 
+> **README Out of date!**
+
 **!This is a work in progress and for my learning only!**
 
 ## Structure:
