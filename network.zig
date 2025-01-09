@@ -1,6 +1,6 @@
 //! This module contains the structures for networks and layers
 const std = @import("std");
-const VecOps = @import("vectors.zig").VecOps;
+const VecOps = @import("vectors.zig");
 
 /// Enum containing activation function types
 pub const ActivationFn = enum {
