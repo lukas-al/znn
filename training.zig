@@ -56,7 +56,7 @@ pub fn trainNetwork(
 
         // 3) Report
         if (verbose) {
-            const status = try std.fmt.allocPrint(temp_allocator, "Error: {d:.6}", .{current_err});
+            const status = try std.fmt.allocPrint(temp_allocator, "Error: {d:.6} ", .{current_err});
             try progress.update(epoch, status);
         }
     }
@@ -93,7 +93,7 @@ test "Integration Test: Does it solve a real problem?" {
         &[_]f32{0},
     };
 
-    try trainNetwork(&network, &inputs, &targets, 100000, 0.5, 0.01, 15, true);
+    try trainNetwork(&network, &inputs, &targets, 1000, 0.5, 0.01, 15, true);
 
     // Verify the network learned XOR
     for (inputs, targets) |input, target| {
