@@ -19,7 +19,7 @@ pub fn trainNetwork(
     if (inputs.len == 0 or inputs.len != targets.len) return error.InvalidInput;
 
     // Create a progress bar
-    var progress = if (verbose) ProgressBar.init(max_epochs, 30) else undefined;
+    var progress = if (verbose) ProgressBar.init(max_epochs, 40) else undefined;
 
     // Create a temp buffer for our results
     var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -30,6 +30,7 @@ pub fn trainNetwork(
     var current_err: f32 = 0;
 
     // Iterate for our epochs
+    std.debug.print("Iterating to max epoch {} ...\n", .{max_epochs});
     while (epoch < max_epochs and current_err > error_threshold or epoch < min_epochs) : (epoch += 1) {
 
         // 1) Iterate over our training and test set
@@ -93,7 +94,7 @@ test "Integration Test: Does it solve a real problem?" {
         &[_]f32{0},
     };
 
-    try trainNetwork(&network, &inputs, &targets, 1000, 0.5, 0.01, 15, true);
+    try trainNetwork(&network, &inputs, &targets, 100, 0.5, 0.01, 15, true);
 
     // Verify the network learned XOR
     for (inputs, targets) |input, target| {
