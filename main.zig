@@ -64,6 +64,7 @@ pub fn main() !void {
     std.debug.print("\n Instantiating our network... \n", .{});
     const layer_sizes = [_]usize{ 784, 128, 64, 10 };
     var network = try Network.init(allocator, &layer_sizes, .ReLu);
+    defer network.deinit();
 
     // Train our network
     std.debug.print("Training... \n", .{});

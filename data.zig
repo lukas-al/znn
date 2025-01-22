@@ -231,9 +231,14 @@ fn validateDataset(name: []const u8, dataset: *const Dataset, expected_size: usi
         try std.testing.expect(image.pixels.len == 28 * 28);
 
         // Validate pixel values are in range 0-255
+        var pixel_sum: u32 = 0;
         for (image.pixels) |pixel| {
             try std.testing.expect(pixel <= 255);
+            pixel_sum += pixel;
         }
+
+        // Validate we don't have a bunch of 0s
+        try std.testing.expect(pixel_sum / image.pixels.len >= 1);
 
         // Validate label is 0-9
         try std.testing.expect(dataset.labels[i] <= 9);

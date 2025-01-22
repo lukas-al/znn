@@ -47,6 +47,47 @@ pub const Layer = struct {
     activation: ActivationFn,
 };
 
+/// Data structure for gradients, used for batched gradient descent
+pub const GradientAccumulator = struct {
+    layers: []Layer,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(
+        network: Network,
+        backing_allocator: std.mem.Allocator,
+    ) !GradientAccumulator {
+        var arena = std.heap.ArenaAllocator.init(backing_allocator);
+        errdefer arena.deinit();
+        const mem_alloc = arena.allocator();
+
+        // Over first dimension
+        const grad_layers = try mem_alloc.alloc(Layer, network.layers.len - 1); // Allocate empty layers
+
+        for (grad_layers, 0..) |*layer, i| {
+            const grad_weights = try mem_alloc.alloc([]f32, network.layers[i].weights.len);
+
+            for (grad_weights) |*row| {
+                row.* = try mem_alloc.alloc(f32, network.layers[i + 1].weights.len);
+                @memset(row.*, 0);
+            }
+
+            const grad_biases = try mem_alloc.alloc(f32, network.layers[i + 1].biases.len); // Allocate and initialises biases for the layer
+            @memset(grad_biases, 0);
+
+            layer.* = Layer{ .weights = grad_weights, .biases = grad_biases, .activation = undefined };
+        }
+
+        return GradientAccumulator{
+            .layers = grad_layers,
+            .arena = arena,
+        };
+    }
+
+    pub fn deinit(self: *GradientAccumulator) void {
+        self.arena.deinit();
+    }
+};
+
 /// Network Struct
 pub const Network = struct {
     layers: []Layer,
@@ -67,7 +108,7 @@ pub const Network = struct {
         var prng = std.rand.DefaultPrng.init(seed);
         const rand = prng.random();
 
-        const layers = try mem_alloc.alloc(Layer, layer_sizes.len - 1); // Allocate the empty memory for the layers struct
+        const layers = try mem_alloc.alloc(Layer, layer_sizes.len - 1); // Allocate the empty layers for the layers struct
 
         for (layers, 0..) |*layer, i| {
             const weights = try mem_alloc.alloc([]f32, layer_sizes[i]); // For each layer - initialise the memory of a weight array
@@ -156,8 +197,118 @@ pub const Network = struct {
         return output;
     }
 
+    // /// Returns gradients for use in Gradient Descent algorithm, doesn't modify the network in place.
+    // /// Implements a MeanSquaredError loss function
+    // pub fn backwardsBatched(
+    //     self: *Network,
+    //     input: [][]const f32,
+    //     target: [][]const f32,
+    //     gradient_acc: GradientAccumulator,
+    // ) !GradientAccumulator {
+    //     // Validate input
+    //     if (self.layers.len == 0 or input.len != self.layers[0].weights.len) return error.InvalidInput;
+    //     if (target.len != self.layers[self.layers.len - 1].biases.len) return error.InvalidInput;
+
+    //     // Reset
+
+    //     var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    //     defer temp_arena.deinit();
+    //     const temp_allocator = temp_arena.allocator();
+
+    //     // Create an array list for our forward passes
+    //     var activations = std.ArrayList([]f32).init(temp_allocator);
+    //     defer activations.deinit();
+
+    //     // Create a buffer for forward pass
+    //     // var buffer = try temp_allocator.alloc(f32, self.maxLayerSize());
+    //     // _ = &buffer; // Acknowledge potential mutation through pointers
+    //     var current = try temp_allocator.dupe(f32, input);
+
+    //     // Perform a forward pass, storing our activations this time.
+    //     try activations.append(current); // Start with the input as the first activation (for our first layer)
+    //     for (self.layers) |layer| {
+    //         // TODO: Is there a way to remove this temporary allocation within each pass?
+    //         // TODO: Can we overwrite it each time via a resizable buffer?
+    //         var next = try temp_allocator.alloc(f32, layer.biases.len);
+    //         _ = &next; // Acknowledge potential mutation through pointers
+
+    //         // Forward pass for each layer from scratch to store intermediate state
+    //         linearForward(next, layer.weights, current, layer.biases);
+
+    //         // Calculate the activation func for each value before we copy to the next layer
+    //         for (next) |*val| {
+    //             val.* = layer.activation.apply(val.*);
+    //         }
+
+    //         // Store our activation for the rest of the backward pass
+    //         try activations.append(next);
+    //         current = next; // Replace current with next and move to the next layer
+    //     }
+
+    //     // ================= Do backward pass
+    //     // (1) Compute error using Mean Squared Error (derives to predictions[i] - target[i])
+    //     const predicted = activations.items[self.layers.len]; // Get the predictions from the final layer
+    //     var current_delta = try temp_allocator.alloc(f32, predicted.len); // Current for each output neuron
+
+    //     // For each output neuron
+    //     for (predicted, 0..) |pred, i| {
+    //         // Component 1: partial derivative of error wrt output. Calculate dError_total / dOutput_i
+    //         const err = pred - target[i]; // This is the same for output and hidden neurons
+    //         // Component 2: partial derivative of output wrt sum. Calculate dOutput_i / dSum_i
+    //         current_delta[i] = err * self.layers[self.layers.len - 1].activation.derivative(pred); // This is the same for output and hidden neurons
+    //     }
+
+    //     // (2) Propagate backwards
+    //     // Idiomatic reverse indexing through array is odd in zig.
+    //     var layer_idx: usize = self.layers.len - 1;
+    //     while (true) : (layer_idx -= 1) {
+    //         const layer = self.layers[layer_idx];
+    //         const activation_in = activations.items[layer_idx]; // Input to this layer
+
+    //         // Component 3: Partial derivative of sum wrt weight. Calculate dSum_i / dWeight_i
+    //         // Allocate next delta - the gradient wrt the *previous* layer's output.
+    //         var next_delta = try temp_allocator.alloc(f32, activation_in.len);
+    //         // Initialise to 0
+    //         for (next_delta) |*nd| {
+    //             nd.* = 0;
+    //         }
+
+    //         // Update each weight and bias, accumulating the delta to calculate the next layer
+    //         for (0..layer.biases.len) |n| {
+    //             // 1. Update bias: dBias = current_delta[n]
+    //             layer.biases[n] -= learning_rate * current_delta[n];
+
+    //             // 2. Update each weight & accumulate gradient
+    //             for (0..activation_in.len) |m| {
+    //                 const input_val = activation_in[m];
+    //                 const grad_w = input_val * current_delta[n];
+
+    //                 // Accumulate delta for previous layer. Calculate next_delta[m] += (delta for this neuron) * (current weight)
+    //                 next_delta[m] += current_delta[n] * layer.weights[m][n];
+
+    //                 // Update the weight
+    //                 layer.weights[m][n] -= learning_rate * grad_w;
+    //             }
+    //         }
+
+    //         // If we're not at the first layer - need the previous layers' contributions. Since we're working backwards...
+    //         if (layer_idx > 0) {
+    //             for (0..activation_in.len) |m| {
+    //                 next_delta[m] = next_delta[m] * self.layers[layer_idx - 1].activation.derivative(activation_in[m]);
+    //             }
+    //         }
+
+    //         // Prep for next iteration
+    //         current_delta = next_delta;
+
+    //         // Stop if we just updated the first layer
+    //         if (layer_idx == 0) break;
+    //     }
+    // }
+
     /// Mutate the network in-place following a backward pass.
-    pub fn backward(
+    /// Implements a MeanSquaredError loss function
+    pub fn backwardInPlace(
         self: *Network,
         input: []const f32,
         target: []const f32,
@@ -352,7 +503,7 @@ test "Forward and Backprop on 2-2-1 Network" {
 
     // -------------- Test backpropagation
     const target_data = [_]f32{1};
-    try network.backward(&input_data, &target_data, 0.05);
+    try network.backwardInPlace(&input_data, &target_data, 0.05);
 
     try std.testing.expectApproxEqAbs(0.12, network.layers[0].weights[0][0], 1e-2);
     try std.testing.expectApproxEqAbs(0.13, network.layers[0].weights[0][1], 1e-2);
@@ -485,4 +636,23 @@ test "VecOps - linearForward on a 2-2 network" {
 
     try std.testing.expectApproxEqAbs(0.41, y[0], 1e-3);
     try std.testing.expectApproxEqAbs(0.47, y[1], 1e-3);
+}
+
+test "Initialise GradientAccumulator" {
+    // var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    // defer arena.deinit();
+    // const mem_alloc = arena.allocator();
+
+    // Create a network
+    const layer_sizes = [_]usize{ 2, 2, 2 };
+    var network = try Network.init(std.testing.allocator, &layer_sizes, .Sigmoid);
+    defer network.deinit();
+
+    // Create our accumulator
+    var grad_accumulator = try GradientAccumulator.init(network, std.testing.allocator);
+    defer grad_accumulator.deinit();
+
+    // Check the structures align
+    try std.testing.expectEqual(grad_accumulator.layers[0].weights[0][0], @as(f32, @floatFromInt(0)));
+    try std.testing.expectEqual(grad_accumulator.layers[0].biases[0], @as(f32, @floatFromInt(0)));
 }
