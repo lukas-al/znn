@@ -213,6 +213,8 @@ test "Load and validate MNIST data" {
 
     // Print some example digits
     printExampleDigits(&data.train_data);
+    std.debug.print("\r ===== TEST DATA ===== \n", .{});
+    printExampleDigits(&data.test_data);
 }
 
 /// Helper function to validate dataset's structure and contents

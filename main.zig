@@ -1,9 +1,9 @@
 //! Main entry point for module
 const std = @import("std");
-const data_loader = @import("data.zig");
-const Network = @import("network.zig").Network;
-const ProgressBar = @import("helpers.zig").ProgressBar;
-const training = @import("training.zig");
+const data_loader = @import("src/data.zig");
+const Network = @import("src/network.zig").Network;
+const ProgressBar = @import("src/helpers.zig").ProgressBar;
+const training = @import("src/training.zig");
 
 /// Convert MNIST image to input array for neural network
 fn imageToInput(image: data_loader.Image, allocator: std.mem.Allocator) ![]f32 {
@@ -34,7 +34,6 @@ pub fn main() !void {
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-
     const allocator = arena.allocator();
 
     // Load the data
@@ -51,13 +50,21 @@ pub fn main() !void {
     std.debug.print("Preparing input data \n", .{});
     var inputs = try allocator.alloc([]f32, data.train_data.images.len);
     var targets = try allocator.alloc([]f32, data.train_data.labels.len);
+    var test_inputs = try allocator.alloc([]f32, data.train_data.images.len);
+    var test_targets = try allocator.alloc([]f32, data.train_data.labels.len);
 
-    var progress = ProgressBar.init(data.train_data.images.len, 40);
-
+    var train_progress = ProgressBar.init(data.train_data.images.len, 40);
     for (data.train_data.images, data.train_data.labels, 0..) |image, label, i| {
-        try progress.update(i, "Converting training data...");
+        try train_progress.update(i, "Converting training data...");
         inputs[i] = try imageToInput(image, allocator);
         targets[i] = try labelToTarget(label, allocator);
+    }
+
+    var test_progress = ProgressBar.init(data.test_data.images.len, 40);
+    for (data.test_data.images, data.test_data.labels, 0..) |test_image, test_label, i| {
+        try test_progress.update(i, "Converting testing data...");
+        test_inputs[i] = try imageToInput(test_image, allocator);
+        test_targets[i] = try labelToTarget(test_label, allocator);
     }
 
     // Instantiate our network
@@ -72,13 +79,31 @@ pub fn main() !void {
         &network,
         inputs,
         targets,
-        100,
+        2,
         0.5,
         0.1,
-        10,
+        1,
         true,
     );
 
-    // Evaluate on our test set
+    // Evaluate on our test set. Calculate RMSE
     std.debug.print("\nEvaluating on test set...\n", .{});
+    var test_err: f32 = 0.0;
+    var sample_err: f32 = 0.0;
+    for (test_inputs, test_targets, 0..) |image, label, i| {
+        sample_err = 0;
+        const output = try network.forward(image, allocator);
+        for (output, label) |out_i, targ_i| {
+            const diff = out_i - targ_i; // Calculate err
+            sample_err += diff * diff; // Square it
+        }
+        sample_err /= @as(f32, @floatFromInt(output.len)); // Mean
+        test_err += std.math.sqrt(sample_err); // Root
+
+        const status = try std.fmt.allocPrint(allocator, "|| Test evaluation error: {}", .{sample_err});
+        try test_progress.update(i, status);
+    }
+
+    test_err = test_err / @as(f32, @floatFromInt(data.test_data.images.len));
+    std.debug.print("Overall error on test is: {d:.6}", .{test_err});
 }
