@@ -50,8 +50,8 @@ pub fn main() !void {
     std.debug.print("Preparing input data \n", .{});
     var inputs = try allocator.alloc([]f32, data.train_data.images.len);
     var targets = try allocator.alloc([]f32, data.train_data.labels.len);
-    var test_inputs = try allocator.alloc([]f32, data.train_data.images.len);
-    var test_targets = try allocator.alloc([]f32, data.train_data.labels.len);
+    var test_inputs = try allocator.alloc([]f32, data.test_data.images.len);
+    var test_targets = try allocator.alloc([]f32, data.test_data.labels.len);
 
     var train_progress = ProgressBar.init(data.train_data.images.len, 40);
     for (data.train_data.images, data.train_data.labels, 0..) |image, label, i| {
@@ -60,6 +60,8 @@ pub fn main() !void {
         targets[i] = try labelToTarget(label, allocator);
     }
 
+    std.debug.print("\n", .{});
+
     var test_progress = ProgressBar.init(data.test_data.images.len, 40);
     for (data.test_data.images, data.test_data.labels, 0..) |test_image, test_label, i| {
         try test_progress.update(i, "Converting testing data...");
@@ -67,8 +69,10 @@ pub fn main() !void {
         test_targets[i] = try labelToTarget(test_label, allocator);
     }
 
+    std.debug.print("\n", .{});
+
     // Instantiate our network
-    std.debug.print("\n Instantiating our network... \n", .{});
+    std.debug.print("Instantiating our network... \n", .{});
     const layer_sizes = [_]usize{ 784, 128, 64, 10 };
     var network = try Network.init(allocator, &layer_sizes, .ReLu);
     defer network.deinit();
@@ -79,8 +83,8 @@ pub fn main() !void {
         &network,
         inputs,
         targets,
-        2,
-        0.5,
+        3,
+        0.2,
         0.1,
         1,
         true,
@@ -92,18 +96,23 @@ pub fn main() !void {
     var sample_err: f32 = 0.0;
     for (test_inputs, test_targets, 0..) |image, label, i| {
         sample_err = 0;
+
         const output = try network.forward(image, allocator);
+        // std.debug.print("\n Output: {any}\n", .{output}); // Testing the potential error
+        // std.debug.print("\n Target: {any}\n", .{label}); // Testing the potential error
+
         for (output, label) |out_i, targ_i| {
             const diff = out_i - targ_i; // Calculate err
             sample_err += diff * diff; // Square it
         }
         sample_err /= @as(f32, @floatFromInt(output.len)); // Mean
-        test_err += std.math.sqrt(sample_err); // Root
+        sample_err = std.math.sqrt(sample_err); // Root
+        test_err += sample_err;
 
         const status = try std.fmt.allocPrint(allocator, "|| Test evaluation error: {}", .{sample_err});
         try test_progress.update(i, status);
     }
 
     test_err = test_err / @as(f32, @floatFromInt(data.test_data.images.len));
-    std.debug.print("Overall error on test is: {d:.6}", .{test_err});
+    std.debug.print("\n Average error on test set is: {d:.6}", .{test_err});
 }

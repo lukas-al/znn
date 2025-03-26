@@ -115,7 +115,7 @@ pub const Network = struct {
         // Create our random number generator
         var seed: u64 = undefined;
         std.crypto.random.bytes(std.mem.asBytes(&seed));
-        var prng = std.rand.DefaultPrng.init(seed);
+        var prng = std.Random.DefaultPrng.init(seed);
         const rand = prng.random();
 
         const layers = try mem_alloc.alloc(Layer, layer_sizes.len - 1); // Allocate the empty layers for the layers struct
@@ -169,10 +169,10 @@ pub const Network = struct {
         input: []const f32,
         output_allocator: std.mem.Allocator,
     ) ![]f32 {
-        // Verify input size matches first layer
-        if (self.layers.len == 0 or input.len != self.layers[0].weights.len) {
-            return error.InvalidInput;
-        }
+        // // Verify input size matches first layer
+        // if (self.layers.len == 0 or input.len != self.layers[0].weights.len) {
+        //     return error.InvalidInput;
+        // }
 
         var temp_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer temp_arena.deinit();
@@ -331,7 +331,7 @@ pub const Network = struct {
             // Stop if we just updated the first layer
             if (layer_idx == 0) break;
         }
-        return pass_err;
+        return pass_err / @as(f32, @floatFromInt(predicted.len));
     }
 };
 

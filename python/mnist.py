@@ -1,6 +1,14 @@
 """
 Python version of a dense NN to solve the MNIST challenge, keeping it nice and simple.
 """
+# /// script
+# dependencies = [
+#     "keras",
+#     "tensorflow",
+# ] 
+# ///
+
+
 from keras.datasets import mnist
 from keras.models import Sequential
 from keras import layers, losses
@@ -29,40 +37,29 @@ print("Training matrix shape", X_train.shape)
 print("Testing matrix shape", X_test.shape)
 
 ## Create our model
-model = Sequential()
-# ! Do we need to add an extra 784 neuron layer to duplicate my implementation?
-model.add(
-    layers.Dense(
-        784, 
-        input_shape=(784,),
-        use_bias=True,
-        activation=layers.Activation("relu")
-    )
-)
-model.add(
+model = Sequential([
+    layers.Input(shape=(784,)),
+    # layers.Dense(
+    #     784, 
+    #     use_bias=True,
+    #     activation=layers.Activation("relu")
+    # ),
     layers.Dense(
         128, 
-        input_shape=(784,),
         use_bias=True,
         activation=layers.Activation("relu")
-    )
-)
-model.add(
+    ),
     layers.Dense(
         64, 
-        input_shape=(128,),
         use_bias=True,
         activation=layers.Activation("relu")
-    )
-)
-model.add(
+    ),
     layers.Dense(
         10, 
-        input_shape=(64,),
         use_bias=True,
         activation=layers.Activation("relu")
     )
-)
+])
 model.summary()
 
 ## Compile model
