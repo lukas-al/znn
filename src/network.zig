@@ -30,15 +30,15 @@ pub const ActivationFn = enum {
     }
 };
 
-/// Modify in-place the y array with a linear y = Ax + b
-pub fn linearForwardOld(y: []f32, weights: []const []const f32, x: []const f32, b: []const f32) void {
-    for (y, 0..) |*y_i, i| {
-        y_i.* = b[i];
-        for (weights, 0..) |row, j| {
-            y_i.* += row[i] * x[j];
-        }
-    }
-}
+// /// Modify in-place the y array with a linear y = Ax + b
+// pub fn linearForwardOld(y: []f32, weights: []const []const f32, x: []const f32, b: []const f32) void {
+//     for (y, 0..) |*y_i, i| {
+//         y_i.* = b[i];
+//         for (weights, 0..) |row, j| {
+//             y_i.* += row[i] * x[j];
+//         }
+//     }
+// }
 
 /// Modify in-place the y array with a linear y = Ax + b
 pub fn linearForward(y: []f32, weights: []const []const f32, x: []const f32, b: []const f32) void {
@@ -126,14 +126,17 @@ pub const Network = struct {
             for (weights) |*row| {
                 row.* = try mem_alloc.alloc(f32, layer_sizes[i + 1]); // For each row , create another pointer array connecting it to each neuron in the next layer
 
+                // He/Kaiming initialization: scale = sqrt(2 / fan_in)
+                const scale = std.math.sqrt(2.0 / @as(f32, @floatFromInt(layer_sizes[i])));
+
                 for (row.*) |*weight| {
-                    weight.* = rand.floatNorm(f32); // For each individual weight in the row, initialise it randomly and resolve the pointer
+                    weight.* = rand.floatNorm(f32) * scale; // For each individual weight in the row, initialise it randomly and resolve the pointer
                 }
             }
 
             const biases = try mem_alloc.alloc(f32, layer_sizes[i + 1]); // Allocate and initialises biases for the layer
             for (biases) |*bias| {
-                bias.* = rand.floatNorm(f32);
+                bias.* = 0.0; // Initialise biases to 0
             }
 
             layer.* = Layer{ .weights = weights, .biases = biases, .activation = activation_fn }; // Create the layer struct
@@ -190,7 +193,8 @@ pub const Network = struct {
             _ = &next; // Acknowledge potential mutation through pointers
 
             // Forward pass for each layer from scratch to store intermediate state
-            linearForwardOld(next, layer.weights, current, layer.biases);
+            // linearForwardOld(next, layer.weights, current, layer.biases);
+            linearForward(next, layer.weights, current, layer.biases);
 
             // Calculate the activation func for each value before we copy to the next layer
             for (next) |*val| {
@@ -240,7 +244,7 @@ pub const Network = struct {
         // Store for current size
         var current = try temp_allocator.dupe(f32, input);
 
-        var pass_err: f32 = undefined;
+        var pass_err: f32 = 0.0;
 
         // Perform a forward pass, storing our activations this time.
         try activations.append(current); // Start with the input as the first activation (for our first layer)
@@ -249,7 +253,8 @@ pub const Network = struct {
             _ = &next; // Acknowledge potential mutation through pointers
 
             // Forward pass for each layer from scratch to store intermediate state
-            linearForwardOld(next, layer.weights, current, layer.biases);
+            // linearForwardOld(next, layer.weights, current, layer.biases);
+            linearForward(next, layer.weights, current, layer.biases);
 
             // Calculate the activation func for each value before we copy to the next layer
             for (next) |*val| {
@@ -280,7 +285,7 @@ pub const Network = struct {
         for (predicted, 0..) |pred, i| {
             // Component 1: partial derivative of error wrt output. Calculate dError_total / dOutput_i
             const err = pred - target[i]; // This is the same for output and hidden neurons
-            pass_err += err;
+            pass_err += err * err;
             // Component 2: partial derivative of output wrt sum. Calculate dOutput_i / dSum_i
             current_delta[i] = err * self.layers[self.layers.len - 1].activation.derivative(pred); // This is the same for output and hidden neurons
         }
@@ -331,7 +336,10 @@ pub const Network = struct {
             // Stop if we just updated the first layer
             if (layer_idx == 0) break;
         }
-        return pass_err / @as(f32, @floatFromInt(predicted.len));
+
+        pass_err = std.math.sqrt(pass_err / @as(f32, @floatFromInt(predicted.len)));
+
+        return pass_err;
     }
 };
 
@@ -447,6 +455,8 @@ test "Network - single layer forward pass" {
 }
 
 test "Forward and Backprop on 2-2-1 Network" {
+    std.debug.print("Forwarding and backpropping on a 2-2-1 network...\n", .{});
+
     const layer_sizes = [_]usize{ 2, 2, 1 };
     var network = try Network.init(std.testing.allocator, &layer_sizes, .ReLu);
     defer network.deinit();
@@ -469,6 +479,8 @@ test "Forward and Backprop on 2-2-1 Network" {
     const input_data = [_]f32{ 2, 3 };
     const output_before = try network.forward(&input_data, std.testing.allocator);
     defer std.testing.allocator.free(output_before);
+    std.debug.print("   Output before single backprop: {d:.6}\n", .{output_before});
+
     // Test whether the forward pass has the right results
     try std.testing.expectApproxEqAbs(0.191, output_before[0], 1e-3);
 
@@ -476,7 +488,7 @@ test "Forward and Backprop on 2-2-1 Network" {
     const target_data = [_]f32{1};
     const current_err = try network.backward(&input_data, &target_data, 0.05);
 
-    std.debug.print("Current error is: {}", .{current_err});
+    std.debug.print("   Current error is: {d:.6}\n", .{current_err});
 
     try std.testing.expectApproxEqAbs(0.12, network.layers[0].weights[0][0], 1e-2);
     try std.testing.expectApproxEqAbs(0.13, network.layers[0].weights[0][1], 1e-2);
@@ -492,9 +504,21 @@ test "Forward and Backprop on 2-2-1 Network" {
 
     const output_after = try network.forward(&input_data, std.testing.allocator);
     defer std.testing.allocator.free(output_after);
+    std.debug.print("   Output after single backprop: {d:.6}\n", .{output_after});
 
     // Test whether the updated outputs are right
     try std.testing.expectApproxEqAbs(0.26, output_after[0], 0.01);
+
+    // ------------------------------------------------------------
+
+    // Run another round of backprop to see if the network weights continue updating correctly
+    // const current_err_2 = try network.backward(&input_data, &target_data, 0.05);
+    // defer std.testing.allocator.free(current_err_2);
+    // std.debug.print("   Error after second backprop: {d:.6}\n", .{current_err_2});
+
+    // const output_after_2 = try network.forward(&input_data, std.testing.allocator);
+    // defer std.testing.allocator.free(output_after_2);
+    // std.debug.print("   Output after second backprop: {d:.6}\n", .{output_after_2});
 }
 
 test "Network - Forward on a [2,2,2] network - v1" {

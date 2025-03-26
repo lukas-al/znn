@@ -41,6 +41,7 @@ pub fn trainNetwork(
         for (inputs, targets, 0..) |input, target, i| {
             // 1) Update our network state
             training_err = try network.backward(input, target, learning_rate);
+
             epoch_err += training_err;
 
             // 2) Report
@@ -48,6 +49,11 @@ pub fn trainNetwork(
                 const status = try std.fmt.allocPrint(temp_allocator, "|| Epoch no. {} || Error: {d:.4} ", .{ epoch, training_err });
                 try progress.update(i, status);
             }
+
+            // 3) DEBUG: LETS SEE IF THE WEIGHTS ARE UPDATING CORRECTLY
+            // Print a specific weight to track changes during training
+            // std.debug.print("Layer 1 Weight[0][0]: {d:.8}, Layer 2 Weight[0][1]: {d:.8}\n", .{ network.layers[1].weights[0][0], network.layers[2].weights[0][1] });
+            // std.debug.print("Error: {d:.6}, Learning rate: {d:.6}\n", .{ training_err, learning_rate });
         }
 
         // Get the average training set error for this epoch

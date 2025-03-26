@@ -180,6 +180,25 @@ pub const MNISTData = struct {
     }
 };
 
+/// Convert MNIST image to input array for neural network
+pub fn imageToInput(image: Image, allocator: std.mem.Allocator) ![]f32 {
+    var input = try allocator.alloc(f32, image.width * image.height);
+    for (image.pixels, 0..) |pixel, i| {
+        // Normalize pixel values to [0,1] range
+        input[i] = @as(f32, @floatFromInt(pixel)) / 255.0;
+    }
+    return input;
+}
+
+/// Convert MNIST label to target array for neural network
+pub fn labelToTarget(label: u8, allocator: std.mem.Allocator) ![]f32 {
+    // One-hot encode the label -> fill array with 0 and then set the right label to 1
+    var target = try allocator.alloc(f32, 10);
+    @memset(target, 0);
+    target[label] = 1;
+    return target;
+}
+
 // Tests
 test "Load and validate MNIST data" {
     // Setup paths to your MNIST data files
